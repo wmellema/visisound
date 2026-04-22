@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Visisound — SVG Audio Visualizer</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --fg: #e8e8ef;
+    --accent: #7df9ff;
+    --muted: #8a8aa0;
+    --panel: #14141c;
+    --border: #2a2a38;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(circle at 50% 30%, #15151f 0%, var(--bg) 70%);
+    color: var(--fg);
+    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  body.immersive { background: #000; cursor: none; }
+  body.immersive header,
+  body.immersive footer,
+  body.immersive #drop { display: none !important; }
+  body.immersive #stage { padding: 0; }
+  #exit-hint {
+    position: fixed; top: 12px; right: 16px;
+    color: var(--muted); font-size: 12px;
+    opacity: 0; transition: opacity .3s;
+    pointer-events: none; z-index: 100;
+    text-shadow: 0 0 4px #000;
+  }
+  body.immersive #exit-hint.show { opacity: 1; }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    z-index: 10;
+  }
+  header h1 {
+    font-size: 14px; font-weight: 600; margin: 0;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  header .spacer { flex: 1; }
+  button, label.btn {
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover, label.btn:hover {
+    border-color: var(--accent);
+    background: rgba(125, 249, 255, 0.05);
+  }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary {
+    background: var(--accent);
+    color: #001014;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.primary:hover { background: #a4fcff; }
+  input[type=file] { display: none; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  .control-group {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .control-group label {
+    color: var(--muted); font-size: 12px;
+  }
+  .control-group input[type=range] {
+    width: 80px; accent-color: var(--accent);
+  }
+  main {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  #stage {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  #stage svg {
+    max-width: 100%; max-height: 100%;
+    width: auto; height: auto;
+    display: block;
+    will-change: transform;
+  }
+  #stage svg * {
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: filter 60ms linear;
+  }
+  #drop {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    color: var(--muted);
+    pointer-events: none;
+    text-align: center;
+  }
+  #drop.show { pointer-events: auto; }
+  #drop .box {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 48px 64px;
+    background: rgba(20,20,28,0.6);
+    backdrop-filter: blur(4px);
+  }
+  #drop.dragging .box {
+    border-color: var(--accent);
+    color: var(--fg);
+  }
+  #drop h2 { margin: 0 0 8px; font-size: 18px; color: var(--fg); }
+  #drop p { margin: 4px 0; }
+  footer {
+    padding: 6px 16px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+    display: flex; gap: 16px;
+  }
+  .stat { font-variant-numeric: tabular-nums; }
+  .stat b { color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Visisound</h1>
+    <div class="controls">
+      <label class="btn" for="file">Load SVG</label>
+      <input type="file" id="file" accept=".svg,image/svg+xml" />
+      <button id="mic" class="primary">Start Mic</button>
+      <button id="reshuffle" disabled>Reshuffle</button>
+      <button id="fullscreen" disabled>Fullscreen</button>
+      <div class="control-group">
+        <label for="sens">Sensitivity</label>
+        <input type="range" id="sens" min="0.2" max="3" step="0.05" value="1" />
+      </div>
+      <div class="control-group">
+        <label for="smooth">Smoothing</label>
+        <input type="range" id="smooth" min="0" max="0.95" step="0.01" value="0.7" />
+      </div>
+    </div>
+    <div class="spacer"></div>
+  </header>
+  <main>
+    <div id="stage"></div>
+    <div id="drop" class="show">
+      <div class="box">
+        <h2>Drop an SVG here</h2>
+        <p>or click <em>Load SVG</em> above</p>
+        <p style="margin-top:12px;font-size:12px">Then press <em>Start Mic</em>. Each path gets a random frequency band.</p>
+        <p style="margin-top:12px;font-size:12px">Press <kbd>F</kbd> for fullscreen, <kbd>Esc</kbd> to exit.</p>
+      </div>
+    </div>
+    <div id="exit-hint">Press Esc to exit fullscreen</div>
+  </main>
+  <footer>
+    <span class="stat">Paths: <b id="stat-paths">0</b></span>
+    <span class="stat">FFT bands: <b id="stat-bands">0</b></span>
+    <span class="stat">Level: <b id="stat-level">0.00</b></span>
+    <span class="stat" id="stat-status">Idle</span>
+  </footer>
+
+<script>
+(() => {
+  const stage = document.getElementById('stage');
+  const drop = document.getElementById('drop');
+  const fileInput = document.getElementById('file');
+  const micBtn = document.getElementById('mic');
+  const reshuffleBtn = document.getElementById('reshuffle');
+  const fullscreenBtn = document.getElementById('fullscreen');
+  const exitHint = document.getElementById('exit-hint');
+  const sensInput = document.getElementById('sens');
+  const smoothInput = document.getElementById('smooth');
+  const statPaths = document.getElementById('stat-paths');
+  const statBands = document.getElementById('stat-bands');
+  const statLevel = document.getElementById('stat-level');
+  const statStatus = document.getElementById('stat-status');
+
+  const FFT_SIZE = 1024;          // -> 512 bins
+  const USABLE_BINS = 256;        // skip noisy top half
+  const MIN_SCALE = 1.0;
+  const MAX_SCALE = 1.18;
+  const GLOW_MAX = 18;
+
+  let paths = [];        // {el, bin, base, peak}
+  let analyser = null;
+  let audioCtx = null;
+  let micStream = null;
+  let freqData = null;
+  let prevFreqData = null;
+  let calibrationFrames = 0;
+  const CALIBRATION_TARGET = 60; // ~1s at 60fps to learn ambient noise
+  let rafId = null;
+
+  // ---------- SVG loading ----------
+  async function loadSvgFromFile(file) {
+    if (!file) return;
+    const text = await file.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(text, 'image/svg+xml');
+    const svg = doc.documentElement;
+    if (svg.nodeName.toLowerCase() !== 'svg') {
+      alert('File is not a valid SVG.');
+      return;
+    }
+    if (!svg.getAttribute('preserveAspectRatio')) {
+      svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    }
+    stage.innerHTML = '';
+    stage.appendChild(svg);
+    drop.classList.remove('show');
+    collectPaths(svg);
+    assignBands();
+    reshuffleBtn.disabled = paths.length === 0;
+    fullscreenBtn.disabled = paths.length === 0;
+  }
+
+  function collectPaths(svg) {
+    // Animate any visible drawable element.
+    const sel = 'path, circle, ellipse, rect, polygon, polyline, line';
+    const els = Array.from(svg.querySelectorAll(sel));
+    paths = els.map(el => ({
+      el,
+      binStart: 0,
+      binEnd: 1,
+      weight: 1,
+      peak: 0,
+      noiseFloor: 0,    // adaptive baseline (0..255 in raw byte units, averaged)
+    }));
+    statPaths.textContent = paths.length;
+  }
+
+  function assignBands() {
+    if (paths.length === 0) return;
+    // Log-spaced bands across usable spectrum, then shuffled across paths.
+    const minBin = 2;
+    const maxBin = USABLE_BINS;
+    const n = paths.length;
+    const ranges = [];
+    const logMin = Math.log(minBin);
+    const logMax = Math.log(maxBin);
+    for (let i = 0; i < n; i++) {
+      const a = Math.exp(logMin + (logMax - logMin) * (i / n));
+      const b = Math.exp(logMin + (logMax - logMin) * ((i + 1) / n));
+      const start = Math.max(minBin, Math.floor(a));
+      const end = Math.max(start + 1, Math.floor(b));
+      // Fixed perceptual weight: boost higher bands to compensate for
+      // natural treble rolloff in voice/music. Curve: 1.0 at bin 2 -> ~5.0 at bin 256.
+      const center = (start + end) / 2;
+      const weight = 1 + 4 * (Math.log(center) - logMin) / (logMax - logMin);
+      ranges.push({ start, end, weight });
+    }
+    // Shuffle ranges across paths.
+    for (let i = ranges.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ranges[i], ranges[j]] = [ranges[j], ranges[i]];
+    }
+    paths.forEach((p, i) => {
+      p.binStart = ranges[i].start;
+      p.binEnd = ranges[i].end;
+      p.weight = ranges[i].weight;
+      p.peak = 0;
+      p.noiseFloor = 0;
+    });
+    statBands.textContent = USABLE_BINS;
+  }
+
+  // ---------- Mic ----------
+  async function startMic() {
+    if (analyser) { stopMic(); return; }
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        }
+      });
+    } catch (e) {
+      alert('Mic access denied: ' + e.message);
+      return;
+    }
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = FFT_SIZE;
+    analyser.smoothingTimeConstant = parseFloat(smoothInput.value);
+    src.connect(analyser);
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    prevFreqData = new Uint8Array(analyser.frequencyBinCount);
+    calibrationFrames = 0;
+    // Reset adaptive state on each mic start
+    paths.forEach(p => { p.noiseFloor = 0; p.peak = 0; });
+    micBtn.textContent = 'Stop Mic';
+    micBtn.classList.remove('primary');
+    statStatus.textContent = 'Listening';
+    loop();
+  }
+
+  function stopMic() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    if (micStream) micStream.getTracks().forEach(t => t.stop());
+    if (audioCtx) audioCtx.close();
+    micStream = null;
+    audioCtx = null;
+    analyser = null;
+    freqData = null;
+    micBtn.textContent = 'Start Mic';
+    micBtn.classList.add('primary');
+    statStatus.textContent = 'Idle';
+    // Reset visuals.
+    paths.forEach(p => {
+      p.el.style.transform = '';
+      p.el.style.filter = '';
+    });
+    statLevel.textContent = '0.00';
+  }
+
+  // ---------- Render loop ----------
+  function loop() {
+    rafId = requestAnimationFrame(loop);
+    if (!analyser) return;
+    analyser.smoothingTimeConstant = parseFloat(smoothInput.value);
+    analyser.getByteFrequencyData(freqData);
+    const sens = parseFloat(sensInput.value);
+
+    // Adaptive noise gate tuning:
+    //   FLOOR_RISE: how fast the noise floor adapts UP to new ambient (slow)
+    //   FLOOR_DROP: how fast it adapts DOWN when room gets quieter (faster)
+    //   MARGIN: byte units above floor required to register signal (gate threshold)
+    //   FLUX_MIN: min spectral-flux required (steady noise = ~0 flux, transients = high)
+    const FLOOR_RISE = 0.995;
+    const FLOOR_DROP = 0.85;
+    const MARGIN = 8;       // ~3% of 255 — anything below floor+8 is treated as silence
+    const FLUX_MIN = 1.5;   // per-bin avg byte change needed for an "onset"
+    const calibrating = calibrationFrames < CALIBRATION_TARGET;
+
+    let total = 0;
+    for (let i = 0; i < paths.length; i++) {
+      const p = paths[i];
+      const span = p.binEnd - p.binStart;
+
+      // Average current energy in this band.
+      let sum = 0;
+      let flux = 0;
+      for (let b = p.binStart; b < p.binEnd; b++) {
+        sum += freqData[b];
+        const diff = freqData[b] - prevFreqData[b];
+        if (diff > 0) flux += diff;       // half-wave rectified spectral flux
+      }
+      const energy = sum / span;          // 0..255
+      const fluxAvg = flux / span;        // 0..255
+
+      // Adaptive noise floor (asymmetric EMA): rises slow, drops fast.
+      if (calibrating) {
+        // During calibration: track average aggressively so floor learns fan/AC quickly.
+        p.noiseFloor = p.noiseFloor === 0 ? energy : p.noiseFloor * 0.9 + energy * 0.1;
+        p.peak = 0;
+        continue;
+      }
+      const a = energy > p.noiseFloor ? FLOOR_RISE : FLOOR_DROP;
+      p.noiseFloor = p.noiseFloor * a + energy * (1 - a);
+
+      // Gate: require energy to exceed floor by MARGIN AND have positive flux.
+      const excess = energy - p.noiseFloor - MARGIN;
+      const gateOpen = excess > 0 && fluxAvg > FLUX_MIN;
+      const v = gateOpen
+        ? Math.min(1, (excess / 255) * p.weight * sens * 6)  // 6x scaling for usable range
+        : 0;
+
+      // peak-decay smoothing per path
+      p.peak = Math.max(v, p.peak * 0.88);
+      const amp = p.peak;
+      const scale = MIN_SCALE + (MAX_SCALE - MIN_SCALE) * amp;
+      const glow = (GLOW_MAX * amp).toFixed(1);
+      p.el.style.transform = `scale(${scale.toFixed(3)})`;
+      p.el.style.filter = `drop-shadow(0 0 ${glow}px rgba(125,249,255,${(0.3 + 0.7 * amp).toFixed(2)}))`;
+      total += amp;
+    }
+
+    // Save current spectrum for next frame's flux calculation.
+    prevFreqData.set(freqData);
+
+    if (calibrating) {
+      calibrationFrames++;
+      statStatus.textContent = `Calibrating ambient... ${Math.round(calibrationFrames / CALIBRATION_TARGET * 100)}%`;
+    } else if (statStatus.textContent.startsWith('Calibrating')) {
+      statStatus.textContent = 'Listening';
+    }
+
+    const level = paths.length ? total / paths.length : 0;
+    statLevel.textContent = level.toFixed(2);
+  }
+
+  // ---------- UI wiring ----------
+  fileInput.addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (f) loadSvgFromFile(f);
+    fileInput.value = '';
+  });
+
+  micBtn.addEventListener('click', () => {
+    if (paths.length === 0) {
+      alert('Load an SVG first.');
+      return;
+    }
+    if (analyser) stopMic(); else startMic();
+  });
+
+  reshuffleBtn.addEventListener('click', () => assignBands());
+
+  // ---------- Fullscreen / immersive ----------
+  let hintTimer = null;
+  function showExitHint() {
+    exitHint.classList.add('show');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => exitHint.classList.remove('show'), 1800);
+  }
+  function enterImmersive() {
+    if (paths.length === 0) return;
+    document.body.classList.add('immersive');
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if (req) req.call(el).catch(() => {});
+    showExitHint();
+  }
+  function exitImmersive() {
+    document.body.classList.remove('immersive');
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+      if (exit) exit.call(document).catch(() => {});
+    }
+  }
+  fullscreenBtn.addEventListener('click', enterImmersive);
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement) document.body.classList.remove('immersive');
+  });
+  document.addEventListener('webkitfullscreenchange', () => {
+    if (!document.webkitFullscreenElement) document.body.classList.remove('immersive');
+  });
+  // Wake hint on any input while immersive
+  ['mousemove', 'keydown', 'touchstart'].forEach(ev =>
+    window.addEventListener(ev, () => {
+      if (document.body.classList.contains('immersive')) showExitHint();
+    })
+  );
+  // Keyboard shortcuts
+  window.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      if (document.body.classList.contains('immersive')) exitImmersive();
+      else enterImmersive();
+    } else if (e.key === 'Escape' && document.body.classList.contains('immersive')) {
+      exitImmersive();
+    }
+  });
+
+  // Drag and drop
+  ['dragenter', 'dragover'].forEach(ev =>
+    window.addEventListener(ev, e => {
+      e.preventDefault();
+      drop.classList.add('show', 'dragging');
+    })
+  );
+  ['dragleave', 'drop'].forEach(ev =>
+    window.addEventListener(ev, e => {
+      e.preventDefault();
+      if (ev === 'dragleave' && e.relatedTarget) return;
+      drop.classList.remove('dragging');
+      if (paths.length > 0 && ev !== 'drop') drop.classList.remove('show');
+    })
+  );
+  window.addEventListener('drop', e => {
+    e.preventDefault();
+    drop.classList.remove('dragging');
+    const f = e.dataTransfer.files[0];
+    if (f) loadSvgFromFile(f);
+  });
+
+  // Cleanup on unload
+  window.addEventListener('beforeunload', () => {
+    if (analyser) stopMic();
+  });
+})();
+</script>
+</body>
+</html>
