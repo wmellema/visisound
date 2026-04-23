@@ -157,6 +157,14 @@
         <label for="smooth">Smoothing</label>
         <input type="range" id="smooth" min="0" max="0.95" step="0.01" value="0.7" />
       </div>
+      <div class="control-group">
+        <label for="maxscale">Max size</label>
+        <input type="range" id="maxscale" min="1.02" max="2.5" step="0.01" value="1.18" />
+      </div>
+      <div class="control-group">
+        <label for="curve">Curve</label>
+        <input type="range" id="curve" min="0.2" max="1" step="0.05" value="0.5" />
+      </div>
     </div>
     <div class="spacer"></div>
   </header>
@@ -190,6 +198,8 @@
   const exitHint = document.getElementById('exit-hint');
   const sensInput = document.getElementById('sens');
   const smoothInput = document.getElementById('smooth');
+  const maxScaleInput = document.getElementById('maxscale');
+  const curveInput = document.getElementById('curve');
   const statPaths = document.getElementById('stat-paths');
   const statBands = document.getElementById('stat-bands');
   const statLevel = document.getElementById('stat-level');
@@ -198,7 +208,6 @@
   const FFT_SIZE = 1024;          // -> 512 bins
   const USABLE_BINS = 256;        // skip noisy top half
   const MIN_SCALE = 1.0;
-  const MAX_SCALE = 1.18;
   const GLOW_MAX = 18;
 
   let paths = [];        // {el, bin, base, peak}
@@ -345,6 +354,11 @@
     //   FLUX_FULL: per-bin flux that maps to amp 1.0 (caps the dynamic range)
     const FLUX_GATE = 1.0;
     const FLUX_FULL = 25;
+    const maxScale = parseFloat(maxScaleInput.value);
+    // Curve exponent: <1 = log-like (boosts soft sounds), 1 = linear, >1 = exp-like.
+    // Slider is inverted so left = strongest log boost (most "compressed"/responsive),
+    // right = linear (raw response).
+    const curveExp = parseFloat(curveInput.value);
 
     let total = 0;
     for (let i = 0; i < paths.length; i++) {
@@ -365,8 +379,10 @@
 
       // peak-decay smoothing per path
       p.peak = Math.max(v, p.peak * 0.88);
-      const amp = p.peak;
-      const scale = MIN_SCALE + (MAX_SCALE - MIN_SCALE) * amp;
+      // Apply perceptual curve: amp^curveExp. With curveExp=0.5 -> sqrt curve,
+      // soft sounds grow fast, loud sounds saturate gently. amp stays in 0..1.
+      const amp = Math.pow(p.peak, curveExp);
+      const scale = MIN_SCALE + (maxScale - MIN_SCALE) * amp;
       const glow = (GLOW_MAX * amp).toFixed(1);
       p.el.style.transform = `scale(${scale.toFixed(3)})`;
       p.el.style.filter = `drop-shadow(0 0 ${glow}px rgba(125,249,255,${(0.3 + 0.7 * amp).toFixed(2)}))`;
