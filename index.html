@@ -207,8 +207,6 @@
   let micStream = null;
   let freqData = null;
   let prevFreqData = null;
-  let calibrationFrames = 0;
-  const CALIBRATION_TARGET = 60; // ~1s at 60fps to learn ambient noise
   let rafId = null;
 
   // ---------- SVG loading ----------
@@ -244,7 +242,6 @@
       binEnd: 1,
       weight: 1,
       peak: 0,
-      noiseFloor: 0,    // adaptive baseline (0..255 in raw byte units, averaged)
     }));
     statPaths.textContent = paths.length;
   }
@@ -279,7 +276,6 @@
       p.binEnd = ranges[i].end;
       p.weight = ranges[i].weight;
       p.peak = 0;
-      p.noiseFloor = 0;
     });
     statBands.textContent = USABLE_BINS;
   }
@@ -307,9 +303,7 @@
     src.connect(analyser);
     freqData = new Uint8Array(analyser.frequencyBinCount);
     prevFreqData = new Uint8Array(analyser.frequencyBinCount);
-    calibrationFrames = 0;
-    // Reset adaptive state on each mic start
-    paths.forEach(p => { p.noiseFloor = 0; p.peak = 0; });
+    paths.forEach(p => { p.peak = 0; });
     micBtn.textContent = 'Stop Mic';
     micBtn.classList.remove('primary');
     statStatus.textContent = 'Listening';
@@ -344,49 +338,30 @@
     analyser.getByteFrequencyData(freqData);
     const sens = parseFloat(sensInput.value);
 
-    // Adaptive noise gate tuning:
-    //   FLOOR_RISE: how fast the noise floor adapts UP to new ambient (slow)
-    //   FLOOR_DROP: how fast it adapts DOWN when room gets quieter (faster)
-    //   MARGIN: byte units above floor required to register signal (gate threshold)
-    //   FLUX_MIN: min spectral-flux required (steady noise = ~0 flux, transients = high)
-    const FLOOR_RISE = 0.995;
-    const FLOOR_DROP = 0.85;
-    const MARGIN = 8;       // ~3% of 255 — anything below floor+8 is treated as silence
-    const FLUX_MIN = 1.5;   // per-bin avg byte change needed for an "onset"
-    const calibrating = calibrationFrames < CALIBRATION_TARGET;
+    // Spectral-flux based: only frame-to-frame ENERGY INCREASES drive the visuals.
+    // Steady noise (fan) and sustained notes alike produce ~0 flux and are ignored.
+    // Attacks (drum hits, voice onsets, note changes) produce big flux and trigger paths.
+    //   FLUX_GATE: minimum per-bin flux to register at all (kills mic hiss jitter)
+    //   FLUX_FULL: per-bin flux that maps to amp 1.0 (caps the dynamic range)
+    const FLUX_GATE = 1.0;
+    const FLUX_FULL = 25;
 
     let total = 0;
     for (let i = 0; i < paths.length; i++) {
       const p = paths[i];
       const span = p.binEnd - p.binStart;
 
-      // Average current energy in this band.
-      let sum = 0;
+      // Half-wave-rectified spectral flux for this band.
       let flux = 0;
       for (let b = p.binStart; b < p.binEnd; b++) {
-        sum += freqData[b];
         const diff = freqData[b] - prevFreqData[b];
-        if (diff > 0) flux += diff;       // half-wave rectified spectral flux
+        if (diff > 0) flux += diff;
       }
-      const energy = sum / span;          // 0..255
-      const fluxAvg = flux / span;        // 0..255
+      const fluxAvg = flux / span; // per-bin average byte change
 
-      // Adaptive noise floor (asymmetric EMA): rises slow, drops fast.
-      if (calibrating) {
-        // During calibration: track average aggressively so floor learns fan/AC quickly.
-        p.noiseFloor = p.noiseFloor === 0 ? energy : p.noiseFloor * 0.9 + energy * 0.1;
-        p.peak = 0;
-        continue;
-      }
-      const a = energy > p.noiseFloor ? FLOOR_RISE : FLOOR_DROP;
-      p.noiseFloor = p.noiseFloor * a + energy * (1 - a);
-
-      // Gate: require energy to exceed floor by MARGIN AND have positive flux.
-      const excess = energy - p.noiseFloor - MARGIN;
-      const gateOpen = excess > 0 && fluxAvg > FLUX_MIN;
-      const v = gateOpen
-        ? Math.min(1, (excess / 255) * p.weight * sens * 6)  // 6x scaling for usable range
-        : 0;
+      // Gate noise floor, then map to 0..1 with weight + sensitivity.
+      const gated = Math.max(0, fluxAvg - FLUX_GATE);
+      const v = Math.min(1, (gated / FLUX_FULL) * p.weight * sens);
 
       // peak-decay smoothing per path
       p.peak = Math.max(v, p.peak * 0.88);
@@ -400,13 +375,6 @@
 
     // Save current spectrum for next frame's flux calculation.
     prevFreqData.set(freqData);
-
-    if (calibrating) {
-      calibrationFrames++;
-      statStatus.textContent = `Calibrating ambient... ${Math.round(calibrationFrames / CALIBRATION_TARGET * 100)}%`;
-    } else if (statStatus.textContent.startsWith('Calibrating')) {
-      statStatus.textContent = 'Listening';
-    }
 
     const level = paths.length ? total / paths.length : 0;
     statLevel.textContent = level.toFixed(2);
